@@ -31,13 +31,19 @@ password = 'YourTradingViewPassword'
 tv = TvDatafeed(username, password, chromedriver_path=None)
 ```
 
-If auto login fails, you can try logging in manually by specifying `auto_login=False`
+### Manual login
+
+If you would rather not hand over your credentials, or if auto login fails, use `manual_login=True`
 
 ```
-tv = TvDatafeed(auto_login=False)
+tv = TvDatafeed(manual_login=True)
 ```
 
-It will open TradingView website, you need to login manually. Once logged in return back to terminal and press 'enter', browser will automatically close. Whichever login method is used, login is required only once.
+No username or password is asked for. A browser window is opened on TradingView and it waits for you to log in yourself. Once you are logged in, return to the terminal and press 'enter'; the browser is then closed automatically.
+
+The browser session is remembered, so on later runs the token is refreshed silently in the background and you are only asked to log in again once TradingView's session expires.
+
+`auto_login=False` keeps working as before and does the same thing as `manual_login=True`.
 
 You may use without logging in, but in that case tradingview may limit the symbols and some symbols might not be available. To use it without logging in
 
