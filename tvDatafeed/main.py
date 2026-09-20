@@ -63,7 +63,8 @@ class TvDatafeed:
                 self.token_date = contents["date"]
                 logger.debug("auth loaded")
 
-            self.chromedriver_path = contents["chromedriver_path"]
+            if self.chromedriver_path is None:
+                self.chromedriver_path = contents.get("chromedriver_path")
 
         return token
 
@@ -122,9 +123,32 @@ class TvDatafeed:
         logger.info("cache cleared")
 
     def __init__(
-        self, username=None, password=None, chromedriver_path=None, auto_login=True
+        self,
+        username=None,
+        password=None,
+        chromedriver_path=None,
+        auto_login=True,
+        manual_login=False,
     ) -> None:
-        self.__automatic_login = auto_login
+        """TradingView data feed
+
+        Args:
+            username (str, optional): tradingview username, only used for
+                automatic login. Defaults to None.
+            password (str, optional): tradingview password, only used for
+                automatic login. Defaults to None.
+            chromedriver_path (str, optional): path of the chromedriver
+                executable. Defaults to None.
+            auto_login (bool, optional): log in automatically with the
+                credentials above. Defaults to True.
+            manual_login (bool, optional): open a browser and wait for you to
+                log in to tradingview yourself, no credentials are asked for.
+                Defaults to False.
+        """
+        # `auto_login=False` is the older way of asking for a manual login,
+        # it is kept working here.
+        self.__manual_login = manual_login or not auto_login
+        self.__automatic_login = not self.__manual_login
         self.chromedriver_path = chromedriver_path
         self.profile_dir = os.path.join(self.path, "chrome")
         self.token_date = datetime.date.today() - datetime.timedelta(days=1)
@@ -145,13 +169,10 @@ class TvDatafeed:
         self.chart_session = self.__generate_chart_session()
 
     def __login(self, username, password):
+        """log in with the given credentials, without any user interaction"""
+        driver = self.__webdriver_init(headless=True)
 
-        driver = self.__webdriver_init()
-
-        if not self.__automatic_login:
-            input()
-
-        else:
+        if driver is not None:
             try:
                 logger.debug("click sign in")
                 driver.find_element_by_class_name("tv-header__user-menu-button").click()
@@ -180,7 +201,7 @@ class TvDatafeed:
             except Exception as e:
                 logger.error(f"{e}, {e.args}")
                 logger.error(
-                    "automatic login failed\n Reinitialize tvdatafeed with auto_login=False "
+                    "automatic login failed\n Reinitialize tvdatafeed with manual_login=True "
                 )
 
         return driver
@@ -188,33 +209,80 @@ class TvDatafeed:
     def auth(self, username, password):
         token = self.__load_token()
 
-        if (
-            token is None
-            and (username is None or password is None)
-            and self.__automatic_login
-        ):
-            pass
+        if token is not None:
+            # a token saved earlier today is still good
+            return token
 
-        elif self.token_date == datetime.date.today():
-            pass
+        if self.__manual_login:
+            token = self.__manual_auth()
 
-        elif token is not None and (username is None or password is None):
-            driver = self.__webdriver_init()
-            if driver is not None:
-                token = self.__get_token(driver)
-                self.token_date = datetime.date.today()
-                self.__save_token(token)
+        elif username is None or password is None:
+            # nothing to log in with, caller falls back to the nologin method
+            return None
 
         else:
             driver = self.__login(username, password)
-            if driver is not None:
-                token = self.__get_token(driver)
-                self.token_date = datetime.date.today()
-                self.__save_token(token)
+            token = self.__get_token(driver) if driver is not None else None
+
+        if token is not None:
+            self.token_date = datetime.date.today()
+            self.__save_token(token)
 
         return token
 
-    def __webdriver_init(self):
+    def __has_browser_profile(self):
+        """True once a tradingview login has been done in our chrome profile"""
+        try:
+            return len(os.listdir(self.profile_dir)) > 0
+        except OSError:
+            return False
+
+    def __manual_auth(self):
+        """get a token without ever asking for the user's credentials"""
+        token = None
+
+        if self.__has_browser_profile():
+            # the previous manual login is remembered by the chrome profile,
+            # so try to refresh the token silently before bothering the user
+            logger.info("reusing the previous tradingview browser session")
+            driver = self.__webdriver_init(headless=True)
+            if driver is not None:
+                token = self.__get_token(driver)
+
+        if token is None:
+            driver = self.__wait_for_manual_login()
+            if driver is not None:
+                token = self.__get_token(driver)
+
+            if token is None:
+                logger.error(
+                    "manual login failed, no tradingview session was found in the browser"
+                )
+
+        return token
+
+    def __wait_for_manual_login(self):
+        """open a browser and wait until the user has logged in themselves"""
+        print(
+            "\n\nYou need to log in to tradingview manually."
+            "\nPress 'enter' to open the browser "
+        )
+        input()
+
+        driver = self.__webdriver_init(headless=False)
+        if driver is None:
+            return None
+
+        print(
+            "\n\nLog in to tradingview in the browser window that just opened."
+            "\nOnce you are logged in, come back here and press 'enter'."
+            "\n\nDO NOT CLOSE THE BROWSER, it is closed automatically "
+        )
+        input()
+
+        return driver
+
+    def __webdriver_init(self, headless=True):
         caps = DesiredCapabilities.CHROME
 
         caps["goog:loggingPrefs"] = {"performance": "ALL"}
@@ -223,7 +291,7 @@ class TvDatafeed:
         logger.debug("launching chrome")
         options = Options()
 
-        if self.__automatic_login:
+        if headless:
             options.add_argument("--headless")
             logger.debug("chromedriver in headless mode")
 
@@ -234,16 +302,6 @@ class TvDatafeed:
         driver = None
 
         try:
-            if not self.__automatic_login:
-                print(
-                    "\n\n\nYou need to login manually\n\n Press 'enter' to open the browser "
-                )
-                input()
-                print(
-                    "opening browser. Press enter once lgged in return back and press 'enter'. \n\nDO NOT CLOSE THE BROWSER"
-                )
-                time.sleep(5)
-
             driver = webdriver.Chrome(
                 self.chromedriver_path, desired_capabilities=caps, options=options
             )
@@ -511,7 +569,7 @@ if __name__ == "__main__":
     tv = TvDatafeed(
         # username,
         # password,
-        auto_login=False,
+        manual_login=True,
     )
     # print(tv.get_hist("CRUDEOIL", "MCX", fut_contract=1))
     # print(tv.get_hist("NIFTY", "NSE", fut_contract=1))
