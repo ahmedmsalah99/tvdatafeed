@@ -81,6 +81,12 @@ def parse_args(argv=None):
         help="directory the csv files are written to. Default: ./exported_files",
     )
     parser.add_argument(
+        "--suffix",
+        default="",
+        help="text added to each csv name, e.g. --suffix _latest writes "
+             "EGX_COMI_1D_latest.csv and leaves the training csv alone",
+    )
+    parser.add_argument(
         "--pause",
         type=float,
         default=1.0,
@@ -175,7 +181,8 @@ def main(argv=None):
             failed.append(symbol)
         else:
             filename = os.path.join(
-                args.output_dir, f"{args.exchange}_{symbol}_{INTERVAL.value}.csv"
+                args.output_dir,
+                f"{args.exchange}_{symbol}_{INTERVAL.value}{args.suffix}.csv",
             )
             data.to_csv(filename)
             downloaded.append(symbol)
