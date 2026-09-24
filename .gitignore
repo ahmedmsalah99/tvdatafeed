@@ -18,3 +18,5 @@ venv.bak/
 
 .tv_datafeed
 exported_files
+crypto_watch.log
+.crypto_watch_state.json
