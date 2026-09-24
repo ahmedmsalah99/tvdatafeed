@@ -4,6 +4,8 @@ Runs pull_crypto.py as a subprocess every WATCH_MINUTES, scores the newest bar
 of each coin, and notifies when one moves up much more than it usually does
 while trading much more than it usually does.
 
+The first cycle runs immediately on start, then it waits between cycles.
+
     python crypto_watch.py                      # run in the foreground
     nohup python crypto_watch.py > watch.log 2>&1 &     # ... or in the background
     python crypto_watch.py --once               # one cycle, for testing
@@ -40,8 +42,10 @@ import pandas as pd
 from pull_crypto import COINS, EXCHANGE, DEFAULT_INTERVAL, OUTPUT_DIR, csv_name
 
 # ---- how often, and how unusual is unusual -----------------------------------
-WATCH_MINUTES = 10.0        # how long to wait between cycles
-LOOKBACK_BARS = 288         # trailing bars the "usual" is measured over, 1 day
+WATCH_MINUTES = 5.0         # how long to wait between cycles
+LOOKBACK_BARS = 144         # trailing bars the "usual" is measured over,
+                            # half a day of 5 minute bars - keep this <= the
+                            # bars --days pulls, or the window is never full
 MIN_RETURN_PCT = 1.0        # the bar must be up at least this much
 MIN_RETURN_Z = 3.0          # ... and this many sd above its own recent moves
 MIN_RVOL = 3.0              # ... on this many times its trailing median volume
@@ -196,15 +200,15 @@ def run_puller(cfg):
            "--interval", cfg.interval,
            "--days", str(cfg.days),
            "--output-dir", cfg.output_dir,
-           "--pause", str(cfg.pause)]
+           "--pause", str(cfg.pause),
+           "--login", cfg.login]
     if cfg.coins:
         cmd += ["--coins", ",".join(cfg.coins)]
-    if cfg.no_login:
-        cmd.append("--no-login")
 
     logger.info("pulling: %s", " ".join(cmd))
     try:
         done = subprocess.run(cmd, capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL,
                               timeout=cfg.pull_timeout)
     except subprocess.TimeoutExpired:
         logger.error("the puller did not finish in %ss, skipping this cycle",
@@ -270,8 +274,8 @@ def parse_args(argv=None):
                         help="comma separated pairs instead of the COINS list")
     parser.add_argument("--exchange", default=EXCHANGE)
     parser.add_argument("--interval", default=DEFAULT_INTERVAL)
-    parser.add_argument("--days", type=float, default=1.0,
-                        help="history pulled each cycle, in days. Default: 1.0")
+    parser.add_argument("--days", type=float, default=0.5,
+                        help="history pulled each cycle, in days. Default: 0.5")
     parser.add_argument("--every", type=float, default=WATCH_MINUTES,
                         dest="every_minutes",
                         help=f"minutes between cycles. Default: {WATCH_MINUTES}")
@@ -291,8 +295,12 @@ def parse_args(argv=None):
                         help="seconds to give the puller. Default: 600")
     parser.add_argument("--pause", type=float, default=1.0,
                         help="seconds the puller waits between coins")
-    parser.add_argument("--no-login", action="store_true",
-                        help="passed through to the puller")
+    parser.add_argument("--login", default="none",
+                        choices=["none", "manual", "auto"],
+                        help="passed to the puller. Leave it at none: a "
+                             "background watch cannot answer a login prompt. "
+                             "Run 'python pull_crypto.py --login manual' once "
+                             "by hand to cache a token for the day.")
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser.parse_args(argv)
 
@@ -310,7 +318,8 @@ def main(argv=None):
     print(f"watching {len(coins)} coin(s) on {cfg.exchange}, {cfg.interval}")
     print(f"alert when a bar is up >= {cfg.min_return_pct}% AND "
           f"z >= {cfg.min_return_z} AND rvol >= {cfg.min_rvol}x")
-    print(f"every {cfg.every_minutes} min, logging to {cfg.log_file}")
+    print(f"every {cfg.every_minutes} min, first cycle now, "
+          f"logging to {cfg.log_file}")
     if not os.environ.get(WEBHOOK_ENV):
         print(f"({WEBHOOK_ENV} is not set, so no webhook notifications)")
     print()
