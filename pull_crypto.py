@@ -35,16 +35,19 @@ COINS = [
     "SOLUSDT",
     "BNBUSDT",
     "XRPUSDT",
-    "ADAUSDT",
-    "DOGEUSDT",
     "AVAXUSDT",
     "LINKUSDT",
-    "MATICUSDT",
     "DOTUSDT",
+    "DASHUSDT",
+    "SUIUSDT",
+    "ARKUSDT",
+    "PORTALUSDT",
+    "PROMUSDT",
+    "NEWTUSDT",
+    "ZECUSDT",
+    "LSKUSDT",
     "LTCUSDT",
-    "ATOMUSDT",
-    "NEARUSDT",
-    "APTUSDT",
+    "NILUSDT"
 ]
 
 EXCHANGE = "BINANCE"
