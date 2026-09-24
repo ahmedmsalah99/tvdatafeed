@@ -3,13 +3,13 @@
 The coins are the COINS list below, edit it to change what is pulled. One csv
 per coin is written to exported_files/crypto/.
 
-    python pull_crypto.py                       # last day, 5 minute bars
+    python pull_crypto.py                       # last half day, 5 minute bars
     python pull_crypto.py --interval in_15_minute
     python pull_crypto.py --days 3
     python pull_crypto.py --coins BTCUSDT,ETHUSDT
 
-Crypto trades around the clock, so "the last day" is simply the last 288 five
-minute bars. Change it with --days, or pin an exact count with --n-bars.
+Crypto trades around the clock, so the default half day is simply the last 144
+five minute bars. Change it with --days, or pin an exact count with --n-bars.
 
 LOGGING IN. This script never prompts, so it is safe to run unattended from
 crypto_watch.py. It uses whatever tradingview token is already cached for
@@ -49,7 +49,7 @@ COINS = [
 
 EXCHANGE = "BINANCE"
 DEFAULT_INTERVAL = "in_5_minute"
-DEFAULT_DAYS = 1.0
+DEFAULT_DAYS = 0.5
 OUTPUT_DIR = os.path.join(os.path.curdir, "exported_files", "crypto")
 
 # the tradingview code for each interval, so csv_name works without importing
