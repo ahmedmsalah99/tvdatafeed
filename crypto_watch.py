@@ -43,7 +43,9 @@ from pull_crypto import COINS, EXCHANGE, DEFAULT_INTERVAL, OUTPUT_DIR, csv_name
 
 # ---- how often, and how unusual is unusual -----------------------------------
 WATCH_MINUTES = 5.0         # how long to wait between cycles
-LOOKBACK_BARS = 288         # trailing bars the "usual" is measured over, 1 day
+LOOKBACK_BARS = 144         # trailing bars the "usual" is measured over,
+                            # half a day of 5 minute bars - keep this <= the
+                            # bars --days pulls, or the window is never full
 MIN_RETURN_PCT = 1.0        # the bar must be up at least this much
 MIN_RETURN_Z = 3.0          # ... and this many sd above its own recent moves
 MIN_RVOL = 3.0              # ... on this many times its trailing median volume
@@ -272,8 +274,8 @@ def parse_args(argv=None):
                         help="comma separated pairs instead of the COINS list")
     parser.add_argument("--exchange", default=EXCHANGE)
     parser.add_argument("--interval", default=DEFAULT_INTERVAL)
-    parser.add_argument("--days", type=float, default=1.0,
-                        help="history pulled each cycle, in days. Default: 1.0")
+    parser.add_argument("--days", type=float, default=0.5,
+                        help="history pulled each cycle, in days. Default: 0.5")
     parser.add_argument("--every", type=float, default=WATCH_MINUTES,
                         dest="every_minutes",
                         help=f"minutes between cycles. Default: {WATCH_MINUTES}")
