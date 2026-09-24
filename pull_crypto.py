@@ -10,6 +10,14 @@ per coin is written to exported_files/crypto/.
 
 Crypto trades around the clock, so "the last day" is simply the last 288 five
 minute bars. Change it with --days, or pin an exact count with --n-bars.
+
+LOGGING IN. This script never prompts, so it is safe to run unattended from
+crypto_watch.py. It uses whatever tradingview token is already cached for
+today, and otherwise reads as an anonymous user, which is usually enough for
+the major pairs. To cache a token, run this once by hand:
+
+    python pull_crypto.py --login manual        # opens a browser, asks you to
+                                                # log in, then caches for the day
 """
 import argparse
 import logging
@@ -112,12 +120,21 @@ def parse_args(argv=None):
         default=1.0,
         help="seconds to wait between coins. Default: 1.0",
     )
-    parser.add_argument("--username", help="tradingview username, for automatic login")
-    parser.add_argument("--password", help="tradingview password, for automatic login")
+    parser.add_argument(
+        "--login",
+        default="none",
+        choices=["none", "manual", "auto"],
+        help="none: never prompt, use a cached token if there is one (the "
+             "default, and the only safe one for a background run). "
+             "manual: open a browser and wait for you to log in. "
+             "auto: log in with --username and --password.",
+    )
+    parser.add_argument("--username", help="tradingview username, with --login auto")
+    parser.add_argument("--password", help="tradingview password, with --login auto")
     parser.add_argument(
         "--no-login",
         action="store_true",
-        help="do not log in at all, tradingview then limits what you can read",
+        help=argparse.SUPPRESS,      # kept so older commands still run
     )
     parser.add_argument(
         "--chromedriver-path", help="path of the chromedriver executable"
@@ -129,14 +146,17 @@ def parse_args(argv=None):
 
 
 def connect(args):
-    """log in to tradingview the way the arguments ask for"""
+    """log in to tradingview the way the arguments ask for
+
+    Only --login manual ever waits for a keypress. The default cannot block, so
+    a background run fails loudly instead of hanging on a prompt nobody sees.
+    """
+    if args.login == "auto" and not (args.username and args.password):
+        raise SystemExit("--login auto needs both --username and --password")
+
     from tvDatafeed import TvDatafeed
 
-    if args.no_login:
-        logger.info("connecting without logging in")
-        return TvDatafeed(chromedriver_path=args.chromedriver_path)
-
-    if args.username and args.password:
+    if args.login == "auto":
         logger.info("logging in as %s", args.username)
         return TvDatafeed(
             username=args.username,
@@ -144,8 +164,14 @@ def connect(args):
             chromedriver_path=args.chromedriver_path,
         )
 
-    logger.info("logging in manually")
-    return TvDatafeed(manual_login=True, chromedriver_path=args.chromedriver_path)
+    if args.login == "manual":
+        logger.info("manual login, a browser will open")
+        return TvDatafeed(manual_login=True, chromedriver_path=args.chromedriver_path)
+
+    # "none": no browser and no prompt. TvDatafeed still picks up a token
+    # cached earlier today; without one it reads as an anonymous user.
+    logger.info("no login, using a cached token if there is one")
+    return TvDatafeed(chromedriver_path=args.chromedriver_path)
 
 
 def csv_name(exchange, coin, interval_name, suffix=""):
@@ -185,6 +211,9 @@ def main(argv=None):
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
     )
+
+    if args.no_login:                      # old flag, same thing as the default
+        args.login = "none"
 
     coins = ([c.strip().upper() for c in args.coins.split(",") if c.strip()]
              if args.coins else list(COINS))
