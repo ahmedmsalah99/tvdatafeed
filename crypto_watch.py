@@ -59,26 +59,122 @@ logger = logging.getLogger("crypto_watch")
 
 # ---- notifications -----------------------------------------------------------
 
-def desktop_notify(title, message):
-    """best effort pop up, quietly does nothing where there is no desktop"""
+NOTIFY_SECONDS = 20         # how long the fallback popup stays on screen
+
+# a real Windows toast, not a console beep. WinRT through PowerShell, which is
+# on every Win10/11 box with nothing to install.
+_WINDOWS_TOAST = """
+$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] > $null
+$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(
+    [Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$text = $xml.GetElementsByTagName('text')
+$text[0].AppendChild($xml.CreateTextNode($env:CW_TITLE)) > $null
+$text[1].AppendChild($xml.CreateTextNode($env:CW_BODY)) > $null
+$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('crypto_watch').Show($toast)
+"""
+
+# the fallback: a tkinter window in its own process. tkinter is in the standard
+# library and works on all three platforms, and running it detached means the
+# window can never block the watch or be killed with it.
+_POPUP_CODE = r"""
+import sys, tkinter as tk
+
+title, body, seconds = sys.argv[1], sys.argv[2], float(sys.argv[3])
+root = tk.Tk()
+root.title(title)
+root.configure(bg="#fcfcfb")
+root.attributes("-topmost", True)
+try:
+    root.eval("tk::PlaceWindow . center")
+except tk.TclError:
+    pass
+
+tk.Label(root, text=title, font=("TkDefaultFont", 14, "bold"),
+         fg="#b3261e", bg="#fcfcfb").pack(padx=24, pady=(20, 8))
+tk.Label(root, text=body, font=("TkFixedFont", 11), justify="left",
+         fg="#0b0b0b", bg="#fcfcfb").pack(padx=24, pady=(0, 12))
+tk.Button(root, text="Dismiss", command=root.destroy).pack(pady=(0, 18))
+
+root.after(int(seconds * 1000), root.destroy)
+root.bell()
+root.mainloop()
+"""
+
+
+def _native_notify(title, body):
+    """the operating system's own notification. True if one was really shown."""
     try:
         if sys.platform == "darwin" and shutil.which("osascript"):
-            body = message.replace('"', "'")
-            subprocess.run(
-                ["osascript", "-e",
-                 f'display notification "{body}" with title "{title}"'],
-                check=False, timeout=10,
-            )
-        elif shutil.which("notify-send"):
-            subprocess.run(["notify-send", title, message], check=False, timeout=10)
-        elif sys.platform == "win32" and shutil.which("powershell"):
-            subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 f'[console]::beep(880,400); Write-Host "{title}: {message}"'],
-                check=False, timeout=10,
-            )
-    except Exception as e:                      # never let a pop up kill the watch
-        logger.debug("desktop notification failed: %s", e)
+            def esc(text):
+                return text.replace("\\", "\\\\").replace('"', '\\"')
+
+            script = (f'display notification "{esc(body)}" '
+                      f'with title "{esc(title)}" sound name "Glass"')
+            done = subprocess.run(["osascript", "-e", script], timeout=15,
+                                  stdin=subprocess.DEVNULL, capture_output=True)
+            return done.returncode == 0
+
+        if shutil.which("notify-send"):
+            done = subprocess.run(
+                ["notify-send", "--urgency=critical", "--app-name=crypto_watch",
+                 title, body],
+                timeout=15, stdin=subprocess.DEVNULL, capture_output=True)
+            return done.returncode == 0
+
+        if sys.platform == "win32" and shutil.which("powershell"):
+            env = dict(os.environ, CW_TITLE=title, CW_BODY=body)
+            done = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-Command", _WINDOWS_TOAST],
+                timeout=30, stdin=subprocess.DEVNULL, capture_output=True, env=env)
+            return done.returncode == 0
+    except Exception as e:
+        logger.debug("native notification failed: %s", e)
+    return False
+
+
+def _popup_notify(title, body, seconds=NOTIFY_SECONDS):
+    """a tkinter window, spawned detached so it never blocks the watch"""
+    try:
+        import tkinter                          # noqa: F401  just a probe
+    except Exception as e:
+        logger.debug("no tkinter for the popup: %s", e)
+        return False
+
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", _POPUP_CODE, title, body, str(seconds)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception as e:
+        logger.debug("popup failed: %s", e)
+        return False
+
+
+def ui_notify(title, body, mode="auto"):
+    """put `body` on the screen, by whichever route this machine supports
+
+    auto   try the operating system's notification, fall back to a popup
+    native only the operating system's own notification
+    popup  only the tkinter window
+    none   nothing on screen, console and log only
+    """
+    if mode == "none":
+        return None
+    if mode in ("auto", "native") and _native_notify(title, body):
+        return "native"
+    if mode in ("auto", "popup") and _popup_notify(title, body):
+        return "popup"
+
+    logger.warning(
+        "no on screen notification available (mode %s). The alert is still in "
+        "the console and the log - set $CRYPTO_WATCH_WEBHOOK to have it pushed "
+        "somewhere you will see it.", mode)
+    return None
 
 
 def webhook_notify(text, url=None):
@@ -96,7 +192,7 @@ def webhook_notify(text, url=None):
         logger.warning("webhook failed: %s", e)
 
 
-def notify(alerts):
+def notify(alerts, mode="auto"):
     """one notification per cycle, however many coins fired"""
     lines = [
         f"{a['coin']}  +{a['return_pct']:.2f}%  z={a['return_z']:.1f}  "
@@ -112,7 +208,9 @@ def notify(alerts):
     print("!" * 62 + "\n", flush=True)
     logger.warning("%s\n%s", title, body)
 
-    desktop_notify(title, body)
+    route = ui_notify(title, body, mode)
+    if route:
+        logger.debug("on screen notification via %s", route)
     webhook_notify(f"*{title}*\n{body}")
 
 
@@ -258,7 +356,7 @@ def cycle(cfg, state):
         logger.warning("no csv for: %s", ", ".join(missing))
 
     if alerts:
-        notify(alerts)
+        notify(alerts, cfg.notify)
         save_state(state, cfg.state_file)
     else:
         logger.info("%s - nothing unusual across %d coin(s)",
@@ -301,6 +399,14 @@ def parse_args(argv=None):
                              "background watch cannot answer a login prompt. "
                              "Run 'python pull_crypto.py --login manual' once "
                              "by hand to cache a token for the day.")
+    parser.add_argument("--notify", default="auto",
+                        choices=["auto", "native", "popup", "none"],
+                        help="how alerts appear on screen. auto tries the "
+                             "OS notification, then a tkinter popup. "
+                             "Default: auto")
+    parser.add_argument("--test-notify", action="store_true",
+                        help="send one fake alert and exit, to check that "
+                             "notifications work on this machine")
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser.parse_args(argv)
 
@@ -323,6 +429,14 @@ def main(argv=None):
     if not os.environ.get(WEBHOOK_ENV):
         print(f"({WEBHOOK_ENV} is not set, so no webhook notifications)")
     print()
+
+    if cfg.test_notify:
+        route = ui_notify("crypto_watch test",
+                          "BTCUSDT  +3.50%  z=4.2  rvol=6.1x  @ now",
+                          cfg.notify)
+        print(f"on screen notification: "
+              f"{route or 'NONE - console and log only'}")
+        return 0 if route else 1
 
     state = load_state(cfg.state_file)
 
